@@ -19,12 +19,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           chmod +x gradlew
           ./gradlew assembleDebug testDebugUnitTest --stacktrace
           cp app/build/outputs/apk/debug/app-debug.apk SmartCast.apk
