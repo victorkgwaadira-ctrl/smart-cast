@@ -79,7 +79,9 @@ class HttpServer(
         throw IOException("No free port")
     }
 
-    private class Request(val method: String, val path: String, val headers: Map<String, String>)
+    private class Request(val method: String, val path: String, val query: String, val headers: Map<String, String>) {
+        fun param(name: String): String? = query.split('&').firstOrNull { it.substringBefore('=') == name }?.substringAfter('=', "")
+    }
 
     private fun serve(socket: Socket) {
         socket.use { s ->
@@ -112,8 +114,8 @@ class HttpServer(
             if (idx > 0) headers[line.substring(0, idx).trim().lowercase()] = line.substring(idx + 1).trim()
             if (headers.size > 100) break
         }
-        val path = parts[1].substringBefore('?').substringBefore('#')
-        return Request(parts[0].uppercase(), path, headers)
+        val target = parts[1].substringBefore('#')
+        return Request(parts[0].uppercase(), target.substringBefore('?'), target.substringAfter('?', ""), headers)
     }
 
     private fun readLine(input: InputStream): String? {
@@ -141,7 +143,17 @@ class HttpServer(
             req.path == "/" || req.path == "/tv" || req.path == "/index.html" ->
                 sendText(out, req, 200, "OK", "text/html; charset=utf-8", page())
             req.path == "/state" ->
-                sendText(out, req, 200, "OK", "application/json; charset=utf-8", state.toJson())
+                sendText(out, req, 200, "OK", "application/json; charset=utf-8", stateJson(req.param("since")))
+            req.path.startsWith("/slide/") -> sendSlide(out, req)
+            req.path.startsWith("/control/") -> {
+                val cmd = req.path.removePrefix("/control/")
+                if (cmd in CONTROL_COMMANDS) {
+                    state.onControl?.invoke(cmd)
+                    sendText(out, req, 200, "OK", "application/json; charset=utf-8", stateJson(null))
+                } else {
+                    sendText(out, req, 404, "Not Found", "text/plain", "Unknown command")
+                }
+            }
             req.path == "/stream.mjpg" -> streamMjpeg(out, req)
             req.path == "/frame.jpg" -> {
                 val f = hub.latest()
@@ -179,6 +191,49 @@ class HttpServer(
     private fun sendBytes(out: OutputStream, req: Request, type: String, bytes: ByteArray) {
         writeHead(out, 200, "OK", mapOf("Content-Type" to type, "Content-Length" to bytes.size.toString()))
         if (req.method != "HEAD") out.write(bytes)
+    }
+
+    /**
+     * Current state as JSON with a "rev" fingerprint. If the TV passes the rev it already has,
+     * wait (up to 10 s) until something changes, so slide changes and pauses reach the TV at once.
+     */
+    private fun stateJson(since: String?): String {
+        var json = state.toJson()
+        if (since != null) {
+            val deadline = System.currentTimeMillis() + 10_000
+            while (running && rev(json) == since && System.currentTimeMillis() < deadline) {
+                Thread.sleep(40)
+                json = state.toJson()
+            }
+        }
+        return json.dropLast(1) + ",\"rev\":\"" + rev(json) + "\"}"
+    }
+
+    private fun rev(json: String): String = Integer.toHexString(json.hashCode())
+
+    private fun sendSlide(out: OutputStream, req: Request) {
+        // /slide/<deck>-<index>.jpg
+        val name = req.path.removePrefix("/slide/").substringBefore('.')
+        val deck = name.substringBefore('-').toIntOrNull()
+        val index = name.substringAfter('-', "").toIntOrNull()
+        val slides = state.slides
+        if (slides == null || deck != state.deckVersion || index == null || index !in 0 until slides.count) {
+            sendText(out, req, 404, "Not Found", "text/plain", "No such slide")
+            return
+        }
+        val jpeg = slides.slideJpeg(index)
+        if (jpeg == null) {
+            sendText(out, req, 500, "Internal Server Error", "text/plain", "Couldn't draw that slide")
+            return
+        }
+        writeHead(out, 200, "OK", mapOf(
+            "Content-Type" to "image/jpeg",
+            "Content-Length" to jpeg.size.toString(),
+            "transferMode.dlna.org" to "Interactive",
+            "contentFeatures.dlna.org" to DLNA_FEATURES,
+            "Cache-Control" to "private, max-age=3600", // same URL = same slide, so TVs may cache it
+        ))
+        if (req.method != "HEAD") out.write(jpeg)
     }
 
     private fun streamMjpeg(out: OutputStream, req: Request) {
@@ -248,6 +303,7 @@ class HttpServer(
 
     companion object {
         private const val BOUNDARY = "smartcastframe"
+        private val CONTROL_COMMANDS = setOf("next", "prev", "first", "last")
         private val CRLF = "\r\n".toByteArray(Charsets.ISO_8859_1)
         const val DLNA_FEATURES = "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
 

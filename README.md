@@ -7,6 +7,7 @@ Phone-to-TV app by Vikaranet. One APK that works as the **sender** on Android ph
 | Feature | How it reaches the TV | Works on |
 |---|---|---|
 | **Screen mirroring** (live, fitted to 16:9) | TV web browser, or Smart Cast receiver app | Samsung (Tizen), LG (webOS), Hisense (Vidaa), Philips, Sony, any Android TV / Google TV / Fire TV / TV box |
+| **Present slides** (PDF from PowerPoint, Google Slides, Canva) | TV browser / Smart Cast TV app (instant), or the TV's photo viewer via DLNA | Any of the above |
 | **Cast photos, videos, music** | TV's own player via DLNA (full sound, up to 4K) or the TV browser | Samsung, LG, Sony, Philips, Panasonic, Hisense, TCL, most Android TVs |
 
 ### Fitting the picture to the TV
@@ -27,6 +28,22 @@ Turn the phone sideways for games and videos and they fill the TV almost complet
    - open **Smart Cast** on an Android/Google TV — it finds the phone by itself.
 4. On the phone tap **Start mirroring**, or **Choose photo, video or song**.
    For best quality on videos, tap **Play with the TV's own player (DLNA)**.
+
+## Present mode
+
+Save the presentation as PDF, tap **Choose presentation (PDF)**, and each slide is shown on the TV as a sharp 1920×1080 picture. Your phone screen stays private.
+
+Change slides with any of:
+- the **Back / Next** buttons or tapping the preview,
+- the phone's **volume buttons**,
+- a **Bluetooth presentation clicker or keyboard** paired to the phone (Page Up/Down, arrows, space),
+- the **TV remote** (arrows, channel up/down) when the TV browser passes those keys to the page.
+
+## Bluetooth
+
+Bluetooth can't carry the picture: it moves roughly 1–2 Mbit/s, while smooth Full HD needs about 20, and Samsung/LG TVs don't accept app data over Bluetooth. It is used where it fits:
+- **Clickers and keyboards** paired to the phone drive Present mode.
+- **Sound while mirroring**: pair the phone to a Bluetooth speaker or soundbar, or to the TV itself on Samsung models that offer *Sound Mirroring*.
 
 ## Building the APK (no computer setup needed)
 

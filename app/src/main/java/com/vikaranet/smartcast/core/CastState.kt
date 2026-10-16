@@ -2,7 +2,7 @@ package com.vikaranet.smartcast.core
 
 import java.io.InputStream
 
-enum class Mode { IDLE, MIRROR, MEDIA }
+enum class Mode { IDLE, MIRROR, MEDIA, PRESENT }
 
 /**
  * How the picture is fitted to a 16:9 TV.
@@ -37,6 +37,14 @@ class MediaInfo(
             }
 }
 
+/** A presentation whose slides are served to the TV as full-HD JPEGs. */
+interface SlideSource {
+    val name: String
+    val count: Int
+    /** JPEG of slide [index] (0-based), or null if it can't be rendered. */
+    fun slideJpeg(index: Int): ByteArray?
+}
+
 /** Shared state the phone controls and every TV reads through /state. */
 class CastState {
     @Volatile var mode: Mode = Mode.IDLE
@@ -48,17 +56,42 @@ class CastState {
         private set
     @Volatile var deviceName: String = "Phone"
 
+    @Volatile var slides: SlideSource? = null
+        private set
+    @Volatile var slideIndex: Int = 0
+    @Volatile var deckVersion: Int = 0
+        private set
+
+    /** Commands from a TV remote ("next", "prev", "first", "last"). Set by the app. */
+    @Volatile var onControl: ((String) -> Unit)? = null
+
     fun setMedia(info: MediaInfo?) {
         media = info
         mediaVersion++
         paused = false
     }
 
+    fun setSlides(deck: SlideSource?) {
+        slides = deck
+        slideIndex = 0
+        deckVersion++
+    }
+
+    /** Where to go back to when mirroring or a presentation ends. */
+    fun restingMode(): Mode = when {
+        slides != null -> Mode.PRESENT
+        media != null -> Mode.MEDIA
+        else -> Mode.IDLE
+    }
+
     /** Path TVs use to fetch the current media; the version and extension help DLNA renderers. */
     fun mediaPath(): String? = media?.let { "/media/v$mediaVersion.${it.extension}" }
 
+    fun slidePath(index: Int): String = "/slide/$deckVersion-$index.jpg"
+
     fun toJson(): String {
         val m = media
+        val d = slides
         return buildString {
             append("{\"mode\":\"").append(mode.name.lowercase()).append('"')
             append(",\"fit\":\"").append(fit.name.lowercase()).append('"')
@@ -70,6 +103,16 @@ class CastState {
                 append(",\"kind\":\"").append(m.kind).append('"')
                 append(",\"mime\":").append(jsonString(m.mime))
                 append(",\"url\":").append(jsonString(mediaPath() ?: ""))
+                append('}')
+            }
+            if (d != null) {
+                val i = slideIndex.coerceIn(0, maxOf(0, d.count - 1))
+                append(",\"slide\":{\"name\":").append(jsonString(d.name))
+                append(",\"index\":").append(i)
+                append(",\"count\":").append(d.count)
+                append(",\"deck\":").append(deckVersion)
+                append(",\"url\":").append(jsonString(slidePath(i)))
+                append(",\"next\":").append(if (i + 1 < d.count) jsonString(slidePath(i + 1)) else "null")
                 append('}')
             }
             append('}')

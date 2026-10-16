@@ -25,6 +25,9 @@
   #audio .box { position: absolute; left: 0; top: 50%; width: 100%; text-align: center; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
   #audio .note { font-size: 10vw; color: #00b3a4; }
   #audio .name { font-size: 3vw; margin-top: 2vw; }
+  #present img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; }
+  #slideNo { position: absolute; right: 2vw; bottom: 2vw; background: rgba(14,17,22,0.8); border-radius: 0.8vw;
+    padding: 0.5vw 1.2vw; font-size: 1.5vw; color: #f2f4f7; display: none; }
   #toast { position: absolute; left: 50%; bottom: 5vh; -webkit-transform: translateX(-50%); transform: translateX(-50%);
     background: rgba(14,17,22,0.85); border: 1px solid #2a313c; border-radius: 1vw; padding: 1vw 2vw; font-size: 1.6vw;
     display: none; white-space: nowrap; }
@@ -38,13 +41,14 @@
   <div class="box">
     <h1>Smart <span>Cast</span></h1>
     <p id="idleDevice">Connected to your phone.</p>
-    <p>On the phone, tap <b>Start mirroring</b> or choose a photo, video or song — it will appear here, full screen.</p>
+    <p>On the phone, tap <b>Start mirroring</b> choose slides, or a photo, video or song. It will appear here, full screen.</p>
   </div>
 </div>
 <div id="mirror" class="layer"><img id="mirrorImg" alt=""></div>
 <div id="photo" class="layer"><div class="bg" id="photoBg"></div><div class="fg" id="photoFg"></div></div>
 <div id="video" class="layer"><div class="bg" id="videoBg"></div><video id="vid" playsinline preload="auto"></video></div>
 <div id="audio" class="layer"><div class="box"><div class="note">&#9835;</div><div class="name" id="audioName"></div></div><audio id="aud" preload="auto"></audio></div>
+<div id="present" class="layer"><img id="slideImg" alt=""><div id="slideNo"></div></div>
 <div id="toast"></div>
 <div id="status">Reconnecting to phone&hellip;</div>
 
@@ -63,7 +67,7 @@
   function $(id) { return document.getElementById(id); }
 
   function show(name) {
-    var layers = ['idle', 'mirror', 'photo', 'video', 'audio'];
+    var layers = ['idle', 'mirror', 'photo', 'video', 'audio', 'present'];
     for (var i = 0; i < layers.length; i++) {
       $(layers[i]).className = 'layer' + (layers[i] === name ? ' on' : '');
     }
@@ -78,10 +82,10 @@
     toastTimer = setTimeout(function () { t.style.display = 'none'; }, ms || 5000);
   }
 
-  function get(url, ok, fail) {
+  function get(url, ok, fail, timeoutMs) {
     var x = new XMLHttpRequest();
     x.open('GET', url + (url.indexOf('?') < 0 ? '?' : '&') + 't=' + new Date().getTime(), true);
-    x.timeout = 4000;
+    x.timeout = timeoutMs || 4000;
     x.onreadystatechange = function () {
       if (x.readyState !== 4) return;
       if (x.status === 200) {
@@ -219,6 +223,34 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // ------------------------------------------------------------- slides
+  var slideKey = '';
+  var slideNoTimer = null;
+
+  function showSlide(sl) {
+    var key = sl.deck + '-' + sl.index;
+    if (key === slideKey && view === 'present') return;
+    slideKey = key;
+    if (view !== 'present') { stopMedia(); show('present'); }
+    // Load off-screen first, then swap, so the previous slide stays up until the new one is ready.
+    var pre = new Image();
+    pre.onload = function () {
+      if (slideKey !== key) return;
+      $('slideImg').src = pre.src;
+      var n = $('slideNo');
+      n.innerHTML = (sl.index + 1) + ' / ' + sl.count;
+      n.style.display = 'block';
+      if (slideNoTimer) clearTimeout(slideNoTimer);
+      slideNoTimer = setTimeout(function () { n.style.display = 'none'; }, 2500);
+      if (sl.next) { var ahead = new Image(); ahead.src = sl.next; } // warm the next slide
+    };
+    pre.src = sl.url;
+  }
+
+  function control(cmd) {
+    get('/control/' + cmd, function (s) { apply(s); }, function () {});
+  }
+
   // ------------------------------------------------------------- state loop
   function apply(s) {
     failures = 0;
@@ -232,6 +264,12 @@
       return;
     }
     if (view === 'mirror') stopMirror();
+
+    if (s.mode === 'present' && s.slide) {
+      showSlide(s.slide);
+      return;
+    }
+    if (view === 'present') { slideKey = ''; show('idle'); }
 
     if (s.mode === 'media' && s.media) {
       var pausedChanged = s.paused !== paused;
@@ -252,16 +290,20 @@
     if (view !== 'idle') { stopMedia(); show('idle'); mediaVersion = -1; }
   }
 
+  // The phone answers as soon as something changes (or after 10 s), so slide changes appear at once.
+  var rev = '';
   function poll() {
-    get('/state', function (s) {
+    get('/state' + (rev ? '?since=' + rev : ''), function (s) {
+      rev = s.rev || '';
       apply(s);
-      setTimeout(poll, 700);
+      setTimeout(poll, rev ? 0 : 700);
     }, function () {
+      rev = '';
       failures++;
       if (failures >= 3) $('status').style.display = 'block';
       if (failures >= 3 && view === 'mirror') { stopMirror(); show('idle'); }
       setTimeout(poll, 1500);
-    });
+    }, 15000);
   }
 
   // ------------------------------------------------------------- remote / fullscreen
@@ -278,6 +320,14 @@
   }
   document.addEventListener('keydown', function (e) {
     var k = e.keyCode;
+    if (view === 'present') {
+      // Right / Down / Page Down / Channel Down / Next / Fast-forward / OK -> next slide
+      if (k === 39 || k === 40 || k === 34 || k === 428 || k === 10233 || k === 417 || k === 13) { control('next'); if (e.preventDefault) e.preventDefault(); }
+      // Left / Up / Page Up / Channel Up / Previous / Rewind -> previous slide
+      else if (k === 37 || k === 38 || k === 33 || k === 427 || k === 10232 || k === 412) { control('prev'); if (e.preventDefault) e.preventDefault(); }
+      else if (k === 36) control('first');
+      else if (k === 35) control('last');
+    }
     if (k === 13 || k === 32 || k === 415 || k === 19 || k === 10252) { // OK, space, play, pause, play/pause
       userAction();
     }

@@ -121,8 +121,9 @@ object Dlna {
     }
 
     /** Stops whatever is playing, loads [url] and starts playback. Throws on failure. */
-    fun play(r: Renderer, url: String, mime: String, title: String) {
-        runCatching { action(r, "Stop", "") }
+    fun play(r: Renderer, url: String, mime: String, title: String, stopFirst: Boolean = true) {
+        // Stopping first helps TVs switch between videos; skip it for slides to avoid a black flash.
+        if (stopFirst) runCatching { action(r, "Stop", "") }
         val meta = didl(url, mime, title)
         action(
             r, "SetAVTransportURI",

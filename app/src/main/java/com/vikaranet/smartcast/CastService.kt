@@ -51,6 +51,12 @@ class CastService : Service() {
 
         /** UI callback; always invoked on the main thread. */
         var listener: (() -> Unit)? = null
+        private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        /** Asks the open screen to refresh (safe from any thread). */
+        fun notifyChanged() {
+            mainHandler.post { listener?.invoke() }
+        }
 
         fun tvAddress(): String? {
             if (port <= 0) return null
@@ -82,6 +88,11 @@ class CastService : Service() {
                 cr.openInputStream(uri) ?: throw java.io.FileNotFoundException(uri.toString())
             })
             if (state.mode != Mode.MIRROR) state.mode = Mode.MEDIA
+        }
+
+        init {
+            // TV remote buttons (sent from the TV page) drive the presentation.
+            state.onControl = { cmd -> Presenter.handle(cmd) }
         }
 
         private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
@@ -178,7 +189,7 @@ class CastService : Service() {
                     main.post {
                         if (capturer != null) {
                             capturer = null
-                            state.mode = if (state.media != null) Mode.MEDIA else Mode.IDLE
+                            state.mode = state.restingMode()
                             goForeground(mirroring = false)
                             notifyUi()
                         }
@@ -192,7 +203,7 @@ class CastService : Service() {
         } catch (e: Exception) {
             lastError = "Couldn't start mirroring: ${e.message}"
             capturer = null
-            state.mode = if (state.media != null) Mode.MEDIA else Mode.IDLE
+            state.mode = state.restingMode()
             goForeground(mirroring = false)
         }
     }
@@ -202,7 +213,7 @@ class CastService : Service() {
         capturer = null
         c.stop()
         hub.clear()
-        state.mode = if (state.media != null) Mode.MEDIA else Mode.IDLE
+        state.mode = state.restingMode()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -274,6 +285,7 @@ class CastService : Service() {
 
     private fun shutdown() {
         stopMirroring()
+        Presenter.end()
         unregisterNsd()
         server?.stop()
         server = null
