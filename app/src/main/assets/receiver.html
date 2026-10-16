@@ -25,6 +25,7 @@
   #audio .box { position: absolute; left: 0; top: 50%; width: 100%; text-align: center; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
   #audio .note { font-size: 10vw; color: #00b3a4; }
   #audio .name { font-size: 3vw; margin-top: 2vw; }
+  #mirrorWait { position: absolute; left: 0; top: 50%; width: 100%; text-align: center; font-size: 2.2vw; color: #9aa4b2; display: none; }
   #present img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; }
   #slideNo { position: absolute; right: 2vw; bottom: 2vw; background: rgba(14,17,22,0.8); border-radius: 0.8vw;
     padding: 0.5vw 1.2vw; font-size: 1.5vw; color: #f2f4f7; display: none; }
@@ -44,7 +45,7 @@
     <p>On the phone, tap <b>Start mirroring</b> choose slides, or a photo, video or song. It will appear here, full screen.</p>
   </div>
 </div>
-<div id="mirror" class="layer"><img id="mirrorImg" alt=""></div>
+<div id="mirror" class="layer"><img id="mirrorImg" alt=""><div id="mirrorWait">Mirroring started. Waiting for the phone's picture&hellip;</div></div>
 <div id="photo" class="layer"><div class="bg" id="photoBg"></div><div class="fg" id="photoFg"></div></div>
 <div id="video" class="layer"><div class="bg" id="videoBg"></div><video id="vid" playsinline preload="auto"></video></div>
 <div id="audio" class="layer"><div class="box"><div class="note">&#9835;</div><div class="name" id="audioName"></div></div><audio id="aud" preload="auto"></audio></div>
@@ -333,6 +334,12 @@
     }
   });
   document.addEventListener('click', userAction);
+
+  // Tell the viewer when mirroring is on but no picture has arrived (helps tell phone vs TV problems apart).
+  setInterval(function () {
+    var w = $('mirrorWait');
+    w.style.display = (view === 'mirror' && !($('mirrorImg').naturalWidth > 0)) ? 'block' : 'none';
+  }, 1000);
 
   function tick() {
     var d = new Date();

@@ -21,6 +21,7 @@ import android.view.WindowManager
 import com.vikaranet.smartcast.core.FitMode
 import com.vikaranet.smartcast.core.FrameHub
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 /** Output resolution and quality chosen on the phone. */
 data class CaptureSettings(
@@ -50,6 +51,15 @@ class ScreenCapturer(
     private var captureW = 0
     private var captureH = 0
     @Volatile private var stopped = false
+
+    /** Pictures sent to the TV so far, and the last capture problem (shown on the phone). */
+    @Volatile var framesSent = 0L
+        private set
+    @Volatile var framesCaptured = 0L
+        private set
+    @Volatile var lastError: String? = null
+        private set
+    private var padded: ByteBuffer? = null
 
     private var scratch: Bitmap? = null
     private var out: Bitmap? = null
@@ -142,7 +152,8 @@ class ScreenCapturer(
     private fun onImage(r: ImageReader) {
         if (stopped || r !== reader) return
         val started = SystemClock.uptimeMillis()
-        val image = try { r.acquireLatestImage() } catch (_: Exception) { null } ?: return
+        val image = try { r.acquireLatestImage() } catch (e: Exception) { lastError = "${e.javaClass.simpleName}: ${e.message}"; null } ?: return
+        framesCaptured++
         try {
             val w = image.width
             val h = image.height
@@ -159,9 +170,28 @@ class ScreenCapturer(
             val bmp: Bitmap = src!!
             val buffer = plane.buffer
             buffer.rewind()
-            bmp.copyPixelsFromBuffer(buffer)
+            // Many phones (Samsung especially) leave the last row unpadded, so the buffer is a few
+            // bytes shorter than rowStride × height and copyPixelsFromBuffer refuses it.
+            // Copy into a buffer of the full size first in that case.
+            val needed = rowStride * h
+            val pixels: ByteBuffer = if (buffer.remaining() >= needed) buffer else {
+                var p = padded
+                if (p == null || p.capacity() < needed) {
+                    p = ByteBuffer.allocateDirect(needed)
+                    padded = p
+                }
+                val full: ByteBuffer = p!!
+                full.clear()
+                full.put(buffer)
+                full.rewind()
+                full
+            }
+            bmp.copyPixelsFromBuffer(pixels)
             compose(bmp, w, h)
-        } catch (_: Exception) {
+            framesSent++
+            lastError = null
+        } catch (e: Exception) {
+            lastError = "${e.javaClass.simpleName}: ${e.message}"
         } finally {
             image.close()
         }

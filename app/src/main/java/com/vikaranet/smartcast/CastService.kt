@@ -49,6 +49,10 @@ class CastService : Service() {
             private set
         @Volatile var lastError: String? = null
 
+        /** The running screen capture, for the live frame counter on the phone. */
+        @Volatile var capture: ScreenCapturer? = null
+            private set
+
         /** UI callback; always invoked on the main thread. */
         var listener: (() -> Unit)? = null
         private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -189,6 +193,7 @@ class CastService : Service() {
                     main.post {
                         if (capturer != null) {
                             capturer = null
+                            capture = null
                             state.mode = state.restingMode()
                             goForeground(mirroring = false)
                             notifyUi()
@@ -198,6 +203,7 @@ class CastService : Service() {
             )
             c.start()
             capturer = c
+            capture = c
             state.mode = Mode.MIRROR
             lastError = null
         } catch (e: Exception) {
@@ -211,6 +217,7 @@ class CastService : Service() {
     private fun stopMirroring() {
         val c = capturer ?: return
         capturer = null
+        capture = null
         c.stop()
         hub.clear()
         state.mode = state.restingMode()

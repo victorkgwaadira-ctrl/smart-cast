@@ -65,6 +65,14 @@ class MainActivity : Activity() {
     private var searching = false
     private var loadingDeck = false
     private var previewKey: String? = null
+    private var lastFrames = 0L
+    private var mirrorTicks = 0
+    private val ticker = object : Runnable {
+        override fun run() {
+            updateMirrorStatus()
+            addressText.postDelayed(this, 1000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,11 +93,43 @@ class MainActivity : Activity() {
         CastService.listener = { refresh() }
         if (!CastService.running) CastService.start(this)
         refresh()
+        addressText.removeCallbacks(ticker)
+        addressText.postDelayed(ticker, 1000)
     }
 
     override fun onPause() {
         super.onPause()
         CastService.listener = null
+        addressText.removeCallbacks(ticker)
+    }
+
+    /** Live mirroring status with a picture counter, so problems are visible instead of silent. */
+    private fun updateMirrorStatus() {
+        if (CastService.state.mode != Mode.MIRROR) {
+            mirrorTicks = 0
+            lastFrames = 0
+            return
+        }
+        mirrorTicks++
+        val c = CastService.capture
+        val text: String
+        var problem = false
+        if (c == null) {
+            text = "Starting screen capture…"
+        } else {
+            val sent = c.framesSent
+            val perSecond = (sent - lastFrames).coerceAtLeast(0)
+            lastFrames = sent
+            text = when {
+                sent > 0 && perSecond > 0 -> "● Live on your TV · $perSecond pictures/s"
+                sent > 0 -> "● Live on your TV · screen unchanged (nothing new to send)"
+                c.framesCaptured == 0L && mirrorTicks >= 3 -> { problem = true; "Android hasn't sent any picture of the screen yet." + (c.lastError?.let { "\n$it" } ?: "") }
+                c.framesCaptured > 0 -> { problem = true; "Screen captured but the picture couldn't be prepared." + (c.lastError?.let { "\n$it" } ?: "") }
+                else -> "Starting screen capture…"
+            }
+        }
+        mirrorStatus.text = text
+        mirrorStatus.setTextColor(if (problem) Ui.DANGER else Ui.ACCENT)
     }
 
     private fun buildUi(): View {
@@ -238,8 +278,12 @@ class MainActivity : Activity() {
         val mirroring = state.mode == Mode.MIRROR
         mirrorButton.text = if (mirroring) "Stop mirroring" else "Start mirroring"
         mirrorButton.background = Ui.pressable(this, if (mirroring) Ui.DANGER else Ui.ACCENT)
-        mirrorStatus.text = if (mirroring) "● Live on your TV" else "Shows everything on your phone, shaped for a widescreen TV."
-        mirrorStatus.setTextColor(if (mirroring) Ui.ACCENT else Ui.MUTED)
+        if (mirroring) {
+            if (mirrorTicks == 0) { mirrorStatus.text = "Starting screen capture…"; mirrorStatus.setTextColor(Ui.ACCENT) }
+        } else {
+            mirrorStatus.text = "Shows everything on your phone, shaped for a widescreen TV."
+            mirrorStatus.setTextColor(Ui.MUTED)
+        }
         fitPicker.select(state.fit.ordinal)
         qualityPicker.select(if (CastService.settings.outWidth >= 1920) 1 else 0)
 
