@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Smart Cast</title>
+<style>
+  /* Written in plain ES5 + basic CSS so it runs on older TV browsers (Tizen, webOS, NetCast, Vidaa). */
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #f2f4f7;
+    font-family: "Segoe UI", Roboto, "Samsung One", "LG Smart UI", Helvetica, Arial, sans-serif; cursor: none; }
+  .layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: none; }
+  .on { display: block; }
+  #mirror img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; }
+  .bg { position: absolute; left: -5%; top: -5%; width: 110%; height: 110%; background-position: center; background-size: cover;
+    -webkit-filter: blur(40px) brightness(0.45); filter: blur(40px) brightness(0.45); }
+  .fg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background-position: center; background-repeat: no-repeat; background-size: contain; }
+  video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: transparent; object-fit: contain; }
+  video.cover { object-fit: cover; }
+  #idle { background: #0e1116; }
+  #idle .box { position: absolute; left: 8%; top: 50%; width: 84%; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
+  #idle h1 { font-size: 5vw; margin: 0 0 1vw 0; font-weight: 700; }
+  #idle h1 span { color: #00b3a4; }
+  #idle p { font-size: 2vw; color: #9aa4b2; margin: 0.6vw 0; line-height: 1.4; }
+  #idle .clock { position: absolute; right: 4vw; top: 3vw; font-size: 2.4vw; color: #9aa4b2; }
+  #audio .box { position: absolute; left: 0; top: 50%; width: 100%; text-align: center; -webkit-transform: translateY(-50%); transform: translateY(-50%); }
+  #audio .note { font-size: 10vw; color: #00b3a4; }
+  #audio .name { font-size: 3vw; margin-top: 2vw; }
+  #toast { position: absolute; left: 50%; bottom: 5vh; -webkit-transform: translateX(-50%); transform: translateX(-50%);
+    background: rgba(14,17,22,0.85); border: 1px solid #2a313c; border-radius: 1vw; padding: 1vw 2vw; font-size: 1.6vw;
+    display: none; white-space: nowrap; }
+  #status { position: absolute; right: 2vw; top: 2vw; background: rgba(229,83,75,0.9); border-radius: 0.8vw;
+    padding: 0.6vw 1.4vw; font-size: 1.4vw; display: none; }
+</style>
+</head>
+<body>
+<div id="idle" class="layer on">
+  <div class="clock" id="clock"></div>
+  <div class="box">
+    <h1>Smart <span>Cast</span></h1>
+    <p id="idleDevice">Connected to your phone.</p>
+    <p>On the phone, tap <b>Start mirroring</b> or choose a photo, video or song — it will appear here, full screen.</p>
+  </div>
+</div>
+<div id="mirror" class="layer"><img id="mirrorImg" alt=""></div>
+<div id="photo" class="layer"><div class="bg" id="photoBg"></div><div class="fg" id="photoFg"></div></div>
+<div id="video" class="layer"><div class="bg" id="videoBg"></div><video id="vid" playsinline preload="auto"></video></div>
+<div id="audio" class="layer"><div class="box"><div class="note">&#9835;</div><div class="name" id="audioName"></div></div><audio id="aud" preload="auto"></audio></div>
+<div id="toast"></div>
+<div id="status">Reconnecting to phone&hellip;</div>
+
+<script>
+(function () {
+  var isApp = location.search.indexOf('app=1') >= 0;
+  var view = 'idle';
+  var mediaVersion = -1;
+  var fit = 'smart';
+  var paused = false;
+  var mirrorFallback = false;
+  var fallbackTimer = null;
+  var failures = 0;
+  var toastTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function show(name) {
+    var layers = ['idle', 'mirror', 'photo', 'video', 'audio'];
+    for (var i = 0; i < layers.length; i++) {
+      $(layers[i]).className = 'layer' + (layers[i] === name ? ' on' : '');
+    }
+    view = name;
+  }
+
+  function toast(msg, ms) {
+    var t = $('toast');
+    t.innerHTML = msg;
+    t.style.display = 'block';
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.style.display = 'none'; }, ms || 5000);
+  }
+
+  function get(url, ok, fail) {
+    var x = new XMLHttpRequest();
+    x.open('GET', url + (url.indexOf('?') < 0 ? '?' : '&') + 't=' + new Date().getTime(), true);
+    x.timeout = 4000;
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      if (x.status === 200) {
+        var data = null;
+        try { data = JSON.parse(x.responseText); } catch (e) {}
+        if (data) ok(data); else fail();
+      } else fail();
+    };
+    x.ontimeout = function () {};
+    x.send();
+  }
+
+  // ------------------------------------------------------------- mirroring
+  function startMirror() {
+    stopMedia();
+    show('mirror');
+    mirrorFallback = false;
+    var img = $('mirrorImg');
+    img.onerror = function () {
+      // Some old TV browsers can't show MJPEG streams: fall back to fetching frames one by one.
+      if (view === 'mirror' && !mirrorFallback) { mirrorFallback = true; pollFrames(); }
+    };
+    img.src = '/stream.mjpg?t=' + new Date().getTime();
+  }
+
+  function pollFrames() {
+    if (view !== 'mirror') return;
+    var img = $('mirrorImg');
+    img.onerror = function () { fallbackTimer = setTimeout(pollFrames, 500); };
+    img.onload = function () { fallbackTimer = setTimeout(pollFrames, 30); };
+    img.src = '/frame.jpg?t=' + new Date().getTime();
+  }
+
+  function stopMirror() {
+    if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    var img = $('mirrorImg');
+    img.onerror = null; img.onload = null;
+    img.removeAttribute('src');
+  }
+
+  // ------------------------------------------------------------- media
+  function nearlyTvShaped(w, h) {
+    if (!w || !h) return false;
+    var tv = (window.innerWidth || 16) / (window.innerHeight || 9);
+    return Math.abs(w / h - tv) < 0.15;
+  }
+
+  function showPhoto(m) {
+    var url = m.url;
+    var probe = new Image();
+    probe.onload = function () {
+      var cover = fit === 'fill' || (fit === 'smart' && nearlyTvShaped(probe.width, probe.height));
+      $('photoFg').style.backgroundSize = cover ? 'cover' : 'contain';
+      $('photoBg').style.display = (fit === 'smart' && !cover) ? 'block' : 'none';
+    };
+    $('photoFg').style.backgroundImage = 'url("' + url + '")';
+    $('photoBg').style.backgroundImage = 'url("' + url + '")';
+    probe.src = url;
+    show('photo');
+  }
+
+  function showVideo(m) {
+    var v = $('vid');
+    v.className = fit === 'fill' ? 'cover' : '';
+    $('videoBg').style.display = 'none';
+    v.onloadedmetadata = function () {
+      var shaped = nearlyTvShaped(v.videoWidth, v.videoHeight);
+      if (fit === 'smart' && shaped) v.className = 'cover';
+    };
+    v.onended = function () { toast('Finished. Choose something else on your phone.', 6000); };
+    v.src = m.url;
+    show('video');
+    play(v);
+  }
+
+  function showAudio(m) {
+    $('audioName').innerHTML = escapeHtml(m.name);
+    var a = $('aud');
+    a.src = m.url;
+    show('audio');
+    play(a);
+  }
+
+  function play(el) {
+    if (paused) { try { el.pause(); } catch (e) {} return; }
+    var p;
+    try { p = el.play(); } catch (e) {}
+    if (p && p['catch']) {
+      p['catch'](function () {
+        // Browser blocked sound until a button press: play muted and ask for OK.
+        el.muted = true;
+        try { el.play(); } catch (e) {}
+        toast('Press <b>OK</b> on the remote for sound', 8000);
+      });
+    }
+  }
+
+  function stopMedia() {
+    var v = $('vid'), a = $('aud');
+    try { v.pause(); } catch (e) {}
+    try { a.pause(); } catch (e) {}
+    v.removeAttribute('src'); a.removeAttribute('src');
+    try { v.load(); a.load(); } catch (e) {}
+  }
+
+  function currentPlayer() {
+    if (view === 'video') return $('vid');
+    if (view === 'audio') return $('aud');
+    return null;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ------------------------------------------------------------- state loop
+  function apply(s) {
+    failures = 0;
+    $('status').style.display = 'none';
+    $('idleDevice').innerHTML = 'Connected to <b>' + escapeHtml(s.device || 'your phone') + '</b>.';
+    var fitChanged = s.fit !== fit;
+    fit = s.fit;
+
+    if (s.mode === 'mirror') {
+      if (view !== 'mirror') startMirror();
+      return;
+    }
+    if (view === 'mirror') stopMirror();
+
+    if (s.mode === 'media' && s.media) {
+      var pausedChanged = s.paused !== paused;
+      paused = s.paused;
+      if (s.mediaVersion !== mediaVersion || fitChanged || view === 'idle') {
+        mediaVersion = s.mediaVersion;
+        stopMedia();
+        if (s.media.kind === 'image') showPhoto(s.media);
+        else if (s.media.kind === 'video') showVideo(s.media);
+        else if (s.media.kind === 'audio') showAudio(s.media);
+        else show('idle');
+      } else if (pausedChanged) {
+        var el = currentPlayer();
+        if (el) { if (paused) el.pause(); else play(el); }
+      }
+      return;
+    }
+    if (view !== 'idle') { stopMedia(); show('idle'); mediaVersion = -1; }
+  }
+
+  function poll() {
+    get('/state', function (s) {
+      apply(s);
+      setTimeout(poll, 700);
+    }, function () {
+      failures++;
+      if (failures >= 3) $('status').style.display = 'block';
+      if (failures >= 3 && view === 'mirror') { stopMirror(); show('idle'); }
+      setTimeout(poll, 1500);
+    });
+  }
+
+  // ------------------------------------------------------------- remote / fullscreen
+  function goFullscreen() {
+    var d = document.documentElement;
+    var fn = d.requestFullscreen || d.webkitRequestFullscreen || d.webkitRequestFullScreen || d.mozRequestFullScreen || d.msRequestFullscreen;
+    if (fn) { try { fn.call(d); } catch (e) {} }
+  }
+
+  function userAction() {
+    goFullscreen();
+    var el = currentPlayer();
+    if (el && el.muted) { el.muted = false; play(el); }
+  }
+  document.addEventListener('keydown', function (e) {
+    var k = e.keyCode;
+    if (k === 13 || k === 32 || k === 415 || k === 19 || k === 10252) { // OK, space, play, pause, play/pause
+      userAction();
+    }
+  });
+  document.addEventListener('click', userAction);
+
+  function tick() {
+    var d = new Date();
+    var m = d.getMinutes();
+    $('clock').innerHTML = d.getHours() + ':' + (m < 10 ? '0' : '') + m;
+  }
+  tick();
+  setInterval(tick, 10000);
+
+  if (!isApp) toast('Press <b>OK</b> on the remote for full screen', 7000);
+  poll();
+})();
+</script>
+</body>
+</html>

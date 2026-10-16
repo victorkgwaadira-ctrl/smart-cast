@@ -1,0 +1,46 @@
+name: Build Smart Cast APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # lets the build publish the APK as a downloadable release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug testDebugUnitTest --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk SmartCast.apk
+
+      - name: Upload APK (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartCast-apk
+          path: SmartCast.apk
+
+      # A plain .apk download link on the repo's Releases page — easy to install straight from a phone.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Smart Cast build ${{ github.run_number }}
+          body: Tap SmartCast.apk below to download, then open it to install.
+          files: SmartCast.apk
+          make_latest: true
