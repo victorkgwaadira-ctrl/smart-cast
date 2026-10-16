@@ -95,28 +95,50 @@
   }
 
   // ------------------------------------------------------------- mirroring
+  var forcePoll = location.search.indexOf('poll=1') >= 0;
+  var mjpegTimer = null;
+
   function startMirror() {
     stopMedia();
     show('mirror');
     mirrorFallback = false;
     var img = $('mirrorImg');
-    img.onerror = function () {
-      // Some old TV browsers can't show MJPEG streams: fall back to fetching frames one by one.
-      if (view === 'mirror' && !mirrorFallback) { mirrorFallback = true; pollFrames(); }
-    };
+    img.onload = null;
+    if (forcePoll) { mirrorFallback = true; pollFrames(); return; }
+    img.onerror = function () { useFallback(); };
     img.src = '/stream.mjpg?t=' + new Date().getTime();
+    // Some TV browsers (e.g. several Samsung Tizen versions) accept the live stream but never draw it,
+    // without reporting an error. If no picture shows within 3 s, switch to fetching frames one by one.
+    if (mjpegTimer) clearTimeout(mjpegTimer);
+    mjpegTimer = setTimeout(function () {
+      if (view === 'mirror' && !mirrorFallback && !(img.naturalWidth > 0)) useFallback();
+    }, 3000);
   }
 
+  function useFallback() {
+    if (view !== 'mirror' || mirrorFallback) return;
+    mirrorFallback = true;
+    var img = $('mirrorImg');
+    img.onerror = null;
+    pollFrames();
+  }
+
+  // Loads each frame off-screen first, then swaps it in, so the TV never flashes blank between frames.
   function pollFrames() {
     if (view !== 'mirror') return;
-    var img = $('mirrorImg');
-    img.onerror = function () { fallbackTimer = setTimeout(pollFrames, 500); };
-    img.onload = function () { fallbackTimer = setTimeout(pollFrames, 30); };
-    img.src = '/frame.jpg?t=' + new Date().getTime();
+    var pre = new Image();
+    pre.onload = function () {
+      if (view !== 'mirror') return;
+      $('mirrorImg').src = pre.src;
+      fallbackTimer = setTimeout(pollFrames, 15);
+    };
+    pre.onerror = function () { fallbackTimer = setTimeout(pollFrames, 400); };
+    pre.src = '/frame.jpg?t=' + new Date().getTime();
   }
 
   function stopMirror() {
     if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+    if (mjpegTimer) { clearTimeout(mjpegTimer); mjpegTimer = null; }
     var img = $('mirrorImg');
     img.onerror = null; img.onload = null;
     img.removeAttribute('src');
